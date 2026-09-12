@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vestavision/trail"
+	"github.com/vestavision/trail/archive"
 	"github.com/vestavision/trail/payload"
 	"github.com/vestavision/trail/storage"
 )
@@ -22,6 +23,10 @@ type Config struct {
 	PayloadStores   map[string]payload.Store
 	MaxPayloadBytes int64
 	AllowedOrigins  []string
+	ArchiveCatalog  archive.Catalog
+	ArchiveStore    payload.Store
+	ArchiveRestore  archive.RestoreStore
+	EnableRestore   bool
 }
 
 type Server struct {
@@ -53,8 +58,118 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("GET /api/v1/events/{id}", s.event)
 	mux.HandleFunc("GET /api/v1/events/{event}/payloads/{role}", s.eventPayload)
+	mux.HandleFunc("GET /api/v1/archives", s.archives)
+	mux.HandleFunc("GET /api/v1/archives/{id}", s.archiveDetail)
+	mux.HandleFunc("GET /api/v1/archives/{id}/events", s.archiveEvents)
+	mux.HandleFunc("GET /api/v1/archives/{id}/payloads/{index}", s.archivePayload)
+	mux.HandleFunc("POST /api/v1/archives/{id}/restore", s.restoreArchive)
 	s.handler = recoverMiddleware(cors(cfg.AllowedOrigins, mux))
 	return s, nil
+}
+
+func (s *Server) archives(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.ArchiveCatalog == nil {
+		respondError(w, http.StatusNotImplemented, "capability_unavailable", "archive catalog is not configured")
+		return
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, _ = strconv.Atoi(raw)
+	}
+	if offset < 0 || limit < 1 || limit > 500 {
+		bad(w, errors.New("offset and limit are invalid"))
+		return
+	}
+	v, err := s.cfg.ArchiveCatalog.ListArchives(r.Context(), offset, limit)
+	respond(w, v, err)
+}
+
+func (s *Server) archiveDetail(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.ArchiveCatalog == nil {
+		respondError(w, http.StatusNotImplemented, "capability_unavailable", "archive catalog is not configured")
+		return
+	}
+	v, err := s.cfg.ArchiveCatalog.GetArchive(r.Context(), r.PathValue("id"))
+	respond(w, v, err)
+}
+
+func (s *Server) archiveEvents(w http.ResponseWriter, r *http.Request) {
+	receipt, offset, limit, ok := s.archiveRequest(w, r)
+	if !ok {
+		return
+	}
+	events, complete, err := archive.ReadEvents(r.Context(), s.cfg.ArchiveStore, receipt.Manifest, offset, limit)
+	respond(w, map[string]any{"items": events, "next_offset": offset + len(events), "complete": complete}, err)
+}
+
+func (s *Server) archivePayload(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.ArchiveCatalog == nil || s.cfg.ArchiveStore == nil {
+		respondError(w, http.StatusNotImplemented, "capability_unavailable", "archive access is not configured")
+		return
+	}
+	receipt, err := s.cfg.ArchiveCatalog.GetArchive(r.Context(), r.PathValue("id"))
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	index, err := strconv.Atoi(r.PathValue("index"))
+	if err != nil || index < 0 || index >= len(receipt.Manifest.Payloads) {
+		bad(w, errors.New("invalid payload index"))
+		return
+	}
+	ref := receipt.Manifest.Payloads[index].Archive
+	if ref.Size > s.cfg.MaxPayloadBytes {
+		respondError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "payload exceeds Explorer read limit")
+		return
+	}
+	reader, err := s.cfg.ArchiveStore.Open(r.Context(), ref)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", safeContentType(ref.ContentType))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if ref.Compression == payload.CompressionGZIP {
+		w.Header().Set("Content-Encoding", "gzip")
+	}
+	_, _ = io.Copy(w, io.LimitReader(reader, s.cfg.MaxPayloadBytes))
+}
+
+func (s *Server) restoreArchive(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.EnableRestore || s.cfg.ArchiveRestore == nil {
+		respondError(w, http.StatusNotFound, "not_found", "archive restore is not enabled")
+		return
+	}
+	receipt, offset, limit, ok := s.archiveRequest(w, r)
+	if !ok {
+		return
+	}
+	v, err := archive.Restore(r.Context(), s.cfg.ArchiveStore, s.cfg.PayloadStores, s.cfg.ArchiveRestore, receipt, offset, limit)
+	respond(w, v, err)
+}
+
+func (s *Server) archiveRequest(w http.ResponseWriter, r *http.Request) (archive.Receipt, int, int, bool) {
+	if s.cfg.ArchiveCatalog == nil || s.cfg.ArchiveStore == nil {
+		respondError(w, http.StatusNotImplemented, "capability_unavailable", "archive access is not configured")
+		return archive.Receipt{}, 0, 0, false
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, _ = strconv.Atoi(raw)
+	}
+	if offset < 0 || limit < 1 || limit > 10_000 {
+		bad(w, errors.New("offset and limit are invalid"))
+		return archive.Receipt{}, 0, 0, false
+	}
+	receipt, err := s.cfg.ArchiveCatalog.GetArchive(r.Context(), r.PathValue("id"))
+	if err != nil {
+		respond(w, nil, err)
+		return archive.Receipt{}, 0, 0, false
+	}
+	return receipt, offset, limit, true
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }

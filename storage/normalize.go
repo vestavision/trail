@@ -64,6 +64,8 @@ func normalizeEvent(event wire.Event, metadata trail.Metadata, batchID trail.Eve
 			record.ExecutionStatus = field.Text
 		case convention.FieldExecutionKind:
 			record.ExecutionKind = field.Text
+		case convention.FieldRetentionClass:
+			record.RetentionClass = field.Text
 		case "http.method":
 			record.HTTP.Method = field.Text
 		case "http.scheme":

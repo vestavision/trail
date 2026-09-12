@@ -75,6 +75,7 @@ type EventRecord struct {
 	FlowStatus         string
 	ExecutionStatus    string
 	ExecutionKind      string
+	RetentionClass     string
 	HTTP               HTTPRecord
 	Payloads           []PayloadLink
 	BatchID            trail.EventID

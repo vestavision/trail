@@ -46,6 +46,17 @@ CREATE TABLE IF NOT EXISTS trail_events (
 
 var migrationStatements = []string{
 	createEventsTable,
+	`CREATE TABLE IF NOT EXISTS trail_payload_gc_candidates (
+		store text NOT NULL, object_key text NOT NULL, ref jsonb NOT NULL,
+		eligible_at timestamptz NOT NULL, candidate_at timestamptz NOT NULL DEFAULT now(),
+		retry_after timestamptz NOT NULL DEFAULT now(), attempts integer NOT NULL DEFAULT 0,
+		last_error text NOT NULL DEFAULT '', archive_id text NOT NULL DEFAULT '', PRIMARY KEY (store, object_key)
+	)`,
+	`ALTER TABLE trail_payload_gc_candidates ADD COLUMN IF NOT EXISTS archive_id text NOT NULL DEFAULT ''`,
+	`CREATE INDEX IF NOT EXISTS trail_payload_gc_ready_idx ON trail_payload_gc_candidates (eligible_at, candidate_at, retry_after)`,
+	`CREATE TABLE IF NOT EXISTS trail_archives (archive_id text PRIMARY KEY, manifest jsonb NOT NULL, manifest_ref jsonb NOT NULL, created_at timestamptz NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS trail_event_archives (event_id bytea PRIMARY KEY, archive_id text NOT NULL REFERENCES trail_archives(archive_id), archived_at timestamptz NOT NULL DEFAULT now())`,
+	`CREATE INDEX IF NOT EXISTS trail_event_archives_archive_idx ON trail_event_archives(archive_id)`,
 	`CREATE INDEX IF NOT EXISTS trail_events_time_idx ON trail_events (event_time DESC, event_id DESC)`,
 	`CREATE INDEX IF NOT EXISTS trail_events_flow_idx ON trail_events (flow_id, event_time, event_id) WHERE flow_id IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS trail_events_execution_idx ON trail_events (execution_id, event_time, event_id) WHERE execution_id IS NOT NULL`,

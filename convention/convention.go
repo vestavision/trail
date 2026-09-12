@@ -9,6 +9,7 @@ const (
 	FieldFlowStatus      = "trail.flow.status"
 	FieldExecutionStatus = "trail.execution.status"
 	FieldExecutionKind   = "trail.execution.kind"
+	FieldRetentionClass  = "trail.retention.class"
 )
 
 type Status string
@@ -30,6 +31,12 @@ func ExecutionStatus(status Status) trail.Option {
 
 func ExecutionKind(kind string) trail.Option {
 	return trail.String(FieldExecutionKind, kind)
+}
+
+// RetentionClass assigns an optional lifecycle class to an event. It has no
+// effect unless an external retention engine is configured for that class.
+func RetentionClass(class string) trail.Option {
+	return trail.String(FieldRetentionClass, class)
 }
 
 func IsCanonicalStatus(status string) bool {

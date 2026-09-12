@@ -1,0 +1,29 @@
+{
+  "event_policies": [
+    {
+      "name": "http-success",
+      "match": { "kind": "provider.http", "http_success": true },
+      "ttl": "168h"
+    },
+    {
+      "name": "http-error",
+      "match": { "kind": "provider.http", "http_success": false },
+      "ttl": "720h"
+    },
+    { "name": "business", "match": {}, "ttl": "2160h" }
+  ],
+  "event_classes": { "audit": "8760h" },
+  "payload_classes": {
+    "http": "168h",
+    "error": "720h",
+    "audit": "8760h"
+  },
+  "default_payload_ttl": "168h",
+  "event_batch_size": 1000,
+  "payload_batch_size": 100,
+  "payload_concurrency": 1,
+  "max_events": 100000,
+  "max_payloads": 10000,
+  "max_runtime": "10m",
+  "payload_grace_period": "24h"
+}
