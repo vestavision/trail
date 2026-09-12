@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vestavision/trail/archive"
 	"github.com/vestavision/trail/explorerapi"
 	"github.com/vestavision/trail/payload"
 	"github.com/vestavision/trail/payload/filesystem"
@@ -55,7 +56,14 @@ func run(ctx context.Context) error {
 		}
 		payloads["s3"] = s3
 	}
-	handler, err := explorerapi.New(explorerapi.Config{Store: store, PayloadStores: payloads, MaxPayloadBytes: int64(envInt("TRAIL_EXPLORER_MAX_PAYLOAD_BYTES", 1<<20)), AllowedOrigins: split(os.Getenv("TRAIL_EXPLORER_ALLOWED_ORIGINS"))})
+	var archiveStore payload.Store
+	if os.Getenv("TRAIL_ARCHIVE_STORE") != "" {
+		archiveStore, err = openArchiveStore()
+		if err != nil {
+			return err
+		}
+	}
+	handler, err := explorerapi.New(explorerapi.Config{Store: store, PayloadStores: payloads, MaxPayloadBytes: int64(envInt("TRAIL_EXPLORER_MAX_PAYLOAD_BYTES", 1<<20)), AllowedOrigins: split(os.Getenv("TRAIL_EXPLORER_ALLOWED_ORIGINS")), ArchiveCatalog: store, ArchiveStore: archiveStore, ArchiveRestore: store, EnableRestore: envBool("TRAIL_EXPLORER_ENABLE_ARCHIVE_RESTORE", false)})
 	if err != nil {
 		return err
 	}
@@ -72,7 +80,12 @@ func run(ctx context.Context) error {
 	}
 	return err
 }
-func openStore(ctx context.Context) (storage.ExplorerStore, error) {
+func openStore(ctx context.Context) (interface {
+	storage.ExplorerStore
+	archive.Catalog
+	archive.RestoreStore
+	Close() error
+}, error) {
 	switch env("TRAIL_STORE", "clickhouse") {
 	case "clickhouse":
 		s, e := trailch.Open(trailch.Config{Addresses: []string{env("TRAIL_CLICKHOUSE_ADDR", "127.0.0.1:9000")}, Database: env("TRAIL_CLICKHOUSE_DATABASE", "default"), Username: env("TRAIL_CLICKHOUSE_USERNAME", "default"), Password: os.Getenv("TRAIL_CLICKHOUSE_PASSWORD")})
@@ -96,6 +109,25 @@ func openStore(ctx context.Context) (storage.ExplorerStore, error) {
 		return s, nil
 	default:
 		return nil, fmt.Errorf("unknown TRAIL_STORE")
+	}
+}
+
+func openArchiveStore() (payload.Store, error) {
+	switch env("TRAIL_ARCHIVE_STORE", "filesystem") {
+	case "filesystem":
+		root := os.Getenv("TRAIL_ARCHIVE_FILESYSTEM_ROOT")
+		if root == "" {
+			return nil, errors.New("TRAIL_ARCHIVE_FILESYSTEM_ROOT is required")
+		}
+		return filesystem.New(root)
+	case "s3":
+		endpoint := os.Getenv("TRAIL_ARCHIVE_S3_ENDPOINT")
+		if endpoint == "" {
+			return nil, errors.New("TRAIL_ARCHIVE_S3_ENDPOINT is required")
+		}
+		return trails3.Open(trails3.Config{Endpoint: endpoint, AccessKey: os.Getenv("TRAIL_ARCHIVE_S3_ACCESS_KEY"), SecretKey: os.Getenv("TRAIL_ARCHIVE_S3_SECRET_KEY"), Bucket: env("TRAIL_ARCHIVE_S3_BUCKET", "trail-archives"), Region: os.Getenv("TRAIL_ARCHIVE_S3_REGION"), Prefix: env("TRAIL_ARCHIVE_S3_PREFIX", "archives"), Secure: envBool("TRAIL_ARCHIVE_S3_SECURE", false), PathStyle: envBool("TRAIL_ARCHIVE_S3_PATH_STYLE", true), Name: "archive-s3"})
+	default:
+		return nil, errors.New("unknown TRAIL_ARCHIVE_STORE")
 	}
 }
 func env(k, v string) string {

@@ -9,6 +9,13 @@ It makes structured operational events nearly as easy to emit as `fmt.Println`,
 while preserving enough identity to reconstruct a business flow, entity history,
 or execution later in the sink of your choice.
 
+## Live demo
+
+Explore a deterministic one-million-event Trail dataset at
+**[trail.vestavision.io](https://trail.vestavision.io)**. The hosted Explorer
+demonstrates flow timelines, execution relationships, entity history, HTTP
+events, structured fields, and payload references using synthetic demo data.
+
 ```go
 trail.Init(trail.Config{
     Service:     "order-worker",
@@ -273,6 +280,33 @@ The ingestor selects its adapter with `TRAIL_STORE=clickhouse` or
 profile and point both Go services at `TRAIL_POSTGRES_URL`. See
 [PROVING_GROUND.md](PROVING_GROUND.md) for reproducible validation tiers and the
 measurement checklist.
+
+## Retention
+
+Retention is an optional lifecycle component and is completely separate from
+`trail.Init`, `trail.Log`, and `trail.Close`. Trail never starts cleanup
+goroutines, opens retention database connections, or runs a scheduler as part
+of the logging library.
+
+The one-shot `trail-retention` command applies explicit ordered policies to
+ClickHouse or PostgreSQL, archives every eligible batch, and only then deletes
+live rows and safely garbage-collects unreferenced payloads:
+
+```bash
+trail-retention run --config retention.json --dry-run
+TRAIL_ARCHIVE_FILESYSTEM_ROOT=./trail-archives trail-retention run --config retention.json
+```
+
+There is no destructive default policy and no delete-without-archive mode. A
+failed archive write, verification, or catalog commit leaves live events
+untouched. Archives use versioned gzip NDJSON plus a verified manifest and
+support bounded, idempotent restore. PostgreSQL uses bounded transactional
+deletes; ClickHouse uses bounded synchronous mutations and reclaims
+physical space during later merges. Payload GC is eventually consistent and
+honors `payload.Ref.RetainUntil`, `RetentionClass`, shared content-addressed
+references, and configured limits. See [RETENTION.md](RETENTION.md) for policy
+precedence, configuration, and operational guidance; start from
+[`retention.example.json`](retention.example.json).
 
 ## Installation and development
 

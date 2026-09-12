@@ -168,6 +168,20 @@ WHERE flow_id != unhex('00000000000000000000000000000000')
 
 var migrationStatements = []string{
 	createEventsTable,
+	`CREATE TABLE IF NOT EXISTS trail_payload_gc_candidates (
+		store LowCardinality(String), object_key String, ref_json String,
+		eligible_at DateTime64(9, 'UTC'), candidate_at DateTime64(9, 'UTC'),
+		retry_after DateTime64(9, 'UTC'), attempts UInt32, last_error String, archive_id String DEFAULT '',
+		version DateTime64(9, 'UTC')
+	) ENGINE=ReplacingMergeTree(version) ORDER BY (store,object_key)`,
+	`ALTER TABLE trail_payload_gc_candidates ADD COLUMN IF NOT EXISTS archive_id String DEFAULT ''`,
+	`CREATE TABLE IF NOT EXISTS trail_retention_summary_rebuilds (
+		kind Enum8('flow'=1,'execution'=2), identity FixedString(16), version DateTime64(9,'UTC')
+	) ENGINE=ReplacingMergeTree(version) ORDER BY (kind,identity)`,
+	`CREATE TABLE IF NOT EXISTS trail_archives (archive_id String, manifest_json String, manifest_ref_json String, created_at DateTime64(9,'UTC'), version DateTime64(9,'UTC')) ENGINE=ReplacingMergeTree(version) ORDER BY archive_id`,
+	`CREATE TABLE IF NOT EXISTS trail_event_archives (event_id FixedString(16), archive_id String, archived_at DateTime64(9,'UTC'), version DateTime64(9,'UTC')) ENGINE=ReplacingMergeTree(version) ORDER BY event_id SETTINGS deduplicate_merge_projection_mode='rebuild'`,
+	`ALTER TABLE trail_event_archives MODIFY SETTING deduplicate_merge_projection_mode='rebuild'`,
+	`ALTER TABLE trail_event_archives ADD PROJECTION IF NOT EXISTS by_archive (SELECT _part_offset ORDER BY (archive_id,event_id))`,
 	createFlowSummaries,
 	createFlowSummaryView,
 	createExecutionSummaries,

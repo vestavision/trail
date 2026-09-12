@@ -26,6 +26,7 @@ func TestNormalizePromotesPortableFields(t *testing.T) {
 			Fields: []wire.Field{
 				{Key: convention.FieldFlowStatus, Type: "string", Text: "awaiting_review"},
 				{Key: convention.FieldExecutionStatus, Type: "string", Text: string(convention.StatusFailed)},
+				{Key: convention.FieldRetentionClass, Type: "string", Text: "audit"},
 				{Key: "http.status_code", Type: "int", Num: 503},
 				{Key: "http.success", Type: "bool"},
 				{Key: "payload.response.store", Type: "string", Text: "filesystem"},
@@ -41,7 +42,7 @@ func TestNormalizePromotesPortableFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := batch.Events[0]
-	if record.FlowStatus != "awaiting_review" || record.ExecutionStatus != "failed" || record.HTTP.StatusCode != 503 || record.HTTP.Success {
+	if record.FlowStatus != "awaiting_review" || record.ExecutionStatus != "failed" || record.RetentionClass != "audit" || record.HTTP.StatusCode != 503 || record.HTTP.Success {
 		t.Fatalf("record=%+v", record)
 	}
 	if len(record.Payloads) != 1 || record.Payloads[0].Role != "response" || !record.Payloads[0].Truncated || record.Payloads[0].Ref.SHA256 != [32]byte(checksum) {
