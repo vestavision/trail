@@ -9,6 +9,13 @@ It makes structured operational events nearly as easy to emit as `fmt.Println`,
 while preserving enough identity to reconstruct a business flow, entity history,
 or execution later in the sink of your choice.
 
+## Live demo
+
+Explore a deterministic one-million-event Trail dataset at
+**[trail.vestavision.io](https://trail.vestavision.io)**. The hosted Explorer
+demonstrates flow timelines, execution relationships, entity history, HTTP
+events, structured fields, and payload references using synthetic demo data.
+
 ```go
 trail.Init(trail.Config{
     Service:     "order-worker",
