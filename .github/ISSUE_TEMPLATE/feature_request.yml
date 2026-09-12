@@ -1,0 +1,16 @@
+name: Feature request
+description: Propose a focused improvement to Trail
+title: "proposal: "
+labels: [proposal]
+body:
+  - type: textarea
+    id: problem
+    attributes: {label: Problem, description: What concrete problem should Trail solve?}
+    validations: {required: true}
+  - type: textarea
+    id: proposal
+    attributes: {label: Proposed behavior, description: Describe the smallest useful API or behavior.}
+    validations: {required: true}
+  - type: textarea
+    id: tradeoffs
+    attributes: {label: Tradeoffs, description: Note hot-path, allocation, compatibility, or operational costs.}
