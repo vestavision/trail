@@ -36,6 +36,8 @@ type Event struct {
 	RetryOfExecutionID string  `json:"retry_of_execution_id,omitempty"`
 	ExecutionAttempt   uint32  `json:"execution_attempt,omitempty"`
 	ExecutionSource    string  `json:"execution_source,omitempty"`
+	ScopeType          string  `json:"scope_type,omitempty"`
+	ScopeID            string  `json:"scope_id,omitempty"`
 	EntityType         string  `json:"entity_type,omitempty"`
 	EntityID           string  `json:"entity_id,omitempty"`
 	ParentID           string  `json:"parent_id,omitempty"`
@@ -116,7 +118,8 @@ func Unmarshal(data []byte) (Envelope, error) {
 func fromEvent(event trail.Event) Event {
 	encoded := Event{
 		EventID: event.ID.String(), TimestampUnixNano: event.Timestamp, Kind: event.Kind,
-		Level: event.Level.String(), EntityType: event.EntityType, EntityID: event.EntityID,
+		Level: event.Level.String(), ScopeType: event.ScopeType, ScopeID: event.ScopeID,
+		EntityType: event.EntityType, EntityID: event.EntityID,
 	}
 	if !event.FlowID.IsZero() {
 		encoded.FlowID = event.FlowID.String()
@@ -203,6 +206,9 @@ func validateEvent(event Event) error {
 		if _, err := trail.ParseEventID(event.ParentID); err != nil {
 			return errors.New("invalid parent_id")
 		}
+	}
+	if (event.ScopeType == "") != (event.ScopeID == "") {
+		return errors.New("scope_type and scope_id must be provided together")
 	}
 	switch event.Level {
 	case "debug", "info", "warn", "error":

@@ -24,12 +24,16 @@ CREATE TABLE IF NOT EXISTS trail_events
     retry_of_execution_id FixedString(16),
     execution_attempt UInt32,
     execution_source LowCardinality(String),
+    scope_type LowCardinality(String),
+    scope_id String,
     entity_type LowCardinality(String),
     entity_id String,
     parent_event_id FixedString(16),
     flow_status LowCardinality(String),
     execution_status LowCardinality(String),
     execution_kind LowCardinality(String),
+    provider LowCardinality(String),
+    has_error UInt8,
     field_keys Array(String),
     field_types Array(String),
     field_text Array(String),
@@ -50,6 +54,7 @@ CREATE TABLE IF NOT EXISTS trail_events
     PROJECTION by_global_time (SELECT _part_offset ORDER BY (event_time, event_id)),
     PROJECTION by_flow (SELECT _part_offset ORDER BY (flow_id, event_time, event_id)),
     PROJECTION by_execution (SELECT _part_offset ORDER BY (execution_id, event_time, event_id)),
+	PROJECTION by_scope (SELECT _part_offset ORDER BY (scope_type, scope_id, event_time, event_id)),
     PROJECTION by_entity (SELECT _part_offset ORDER BY (entity_type, entity_id, event_time, event_id)),
     PROJECTION by_kind (SELECT _part_offset ORDER BY (kind, event_time, event_id)),
     PROJECTION by_http_status (SELECT _part_offset ORDER BY (http_status_code, event_time, event_id))
@@ -168,6 +173,10 @@ WHERE flow_id != unhex('00000000000000000000000000000000')
 
 var migrationStatements = []string{
 	createEventsTable,
+	`ALTER TABLE trail_events ADD COLUMN IF NOT EXISTS scope_type LowCardinality(String) AFTER execution_source`,
+	`ALTER TABLE trail_events ADD COLUMN IF NOT EXISTS scope_id String AFTER scope_type`,
+	`ALTER TABLE trail_events ADD COLUMN IF NOT EXISTS provider LowCardinality(String) AFTER execution_kind`,
+	`ALTER TABLE trail_events ADD COLUMN IF NOT EXISTS has_error UInt8 AFTER provider`,
 	`CREATE TABLE IF NOT EXISTS trail_payload_gc_candidates (
 		store LowCardinality(String), object_key String, ref_json String,
 		eligible_at DateTime64(9, 'UTC'), candidate_at DateTime64(9, 'UTC'),
@@ -189,6 +198,7 @@ var migrationStatements = []string{
 	createFlowTerminals,
 	createFlowTerminalsView,
 	`ALTER TABLE trail_events ADD PROJECTION IF NOT EXISTS by_global_time (SELECT _part_offset ORDER BY (event_time, event_id))`,
+	`ALTER TABLE trail_events ADD PROJECTION IF NOT EXISTS by_scope (SELECT _part_offset ORDER BY (scope_type, scope_id, event_time, event_id))`,
 	`ALTER TABLE trail_events ADD PROJECTION IF NOT EXISTS by_kind (SELECT _part_offset ORDER BY (kind, event_time, event_id))`,
 	`ALTER TABLE trail_events ADD PROJECTION IF NOT EXISTS by_http_status (SELECT _part_offset ORDER BY (http_status_code, event_time, event_id))`,
 }

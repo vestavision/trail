@@ -41,6 +41,7 @@ const (
 	optionField optionKind = iota + 1
 	optionFlow
 	optionExecution
+	optionScope
 	optionEntity
 	optionParent
 	optionLevel
@@ -102,6 +103,12 @@ func Error(err error) Option {
 func Flow(id FlowID) Option           { return Option{kind: optionFlow, id: [16]byte(id)} }
 func Execution(id ExecutionID) Option { return Option{kind: optionExecution, id: [16]byte(id)} }
 func Parent(id EventID) Option        { return Option{kind: optionParent, id: [16]byte(id)} }
+
+// WithScope attaches the event's tenant or security boundary. Scope is not a
+// business entity and must not be used as an authorization decision by Trail.
+func WithScope(scopeType, scopeID string) Option {
+	return Option{kind: optionScope, entityType: scopeType, entityID: scopeID}
+}
 
 func Entity(entityType, entityID string) Option {
 	return Option{kind: optionEntity, entityType: entityType, entityID: entityID}

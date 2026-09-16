@@ -24,7 +24,7 @@ func TestBatchRoundTrip(t *testing.T) {
 	if err := trail.Init(trail.Config{Service: "svc", Sink: sink, BatchSize: 1}); err != nil {
 		t.Fatal(err)
 	}
-	trail.Log(event.Kind, append([]trail.Option{trail.Flow(flow), trail.Execution(execution), trail.WithLevel(trail.LevelWarn)}, options...)...)
+	trail.Log(event.Kind, append([]trail.Option{trail.Flow(flow), trail.Execution(execution), trail.WithScope("tenant", "tenant_1"), trail.WithLevel(trail.LevelWarn)}, options...)...)
 	if err := trail.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,9 @@ func TestBatchRoundTrip(t *testing.T) {
 	if decoded.SchemaVersion != Version || decoded.Metadata.Service != "svc" || len(decoded.Events) != 1 || len(decoded.Events[0].Fields) != 4 {
 		t.Fatalf("decoded envelope = %+v", decoded)
 	}
+	if decoded.Events[0].ScopeType != "tenant" || decoded.Events[0].ScopeID != "tenant_1" {
+		t.Fatalf("scope = %+v", decoded.Events[0])
+	}
 	if decoded.Events[0].Fields[1].Num != ^uint64(2) || decoded.Events[0].Fields[2].Num != math.Float64bits(math.Pi) {
 		t.Fatalf("numeric fields = %+v", decoded.Events[0].Fields)
 	}
@@ -51,6 +54,14 @@ func TestRejectsInvalidEnvelope(t *testing.T) {
 	data, _ := json.Marshal(Envelope{SchemaVersion: 2, BatchID: "bad", Events: []Event{{}}})
 	if _, err := Unmarshal(data); !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("version error = %v", err)
+	}
+}
+
+func TestRejectsPartialScope(t *testing.T) {
+	eventID := trail.EventID(trail.NewFlow()).String()
+	envelope := Envelope{SchemaVersion: Version, BatchID: eventID, Metadata: trail.Metadata{Service: "svc"}, Events: []Event{{EventID: eventID, TimestampUnixNano: 1, Kind: "test", Level: "info", ScopeType: "tenant"}}}
+	if _, err := Marshal(envelope); !errors.Is(err, ErrInvalidEnvelope) {
+		t.Fatalf("partial scope error = %v", err)
 	}
 }
 

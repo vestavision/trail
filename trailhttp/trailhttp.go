@@ -19,12 +19,14 @@ const maxPreviewBytes = 64 << 10
 type Correlation struct {
 	FlowID      trail.FlowID
 	ExecutionID trail.ExecutionID
+	Scope       trail.Scope
 	EntityType  string
 	EntityID    string
 }
 
 type PreviewRedactor func(contentType string, preview []byte) []byte
 type SuccessClassifier func(statusCode int) bool
+type PathNormalizer func(escapedPath string) string
 type Option func(*config)
 
 type config struct {
@@ -39,6 +41,8 @@ type config struct {
 	now             func() time.Time
 	spooler         *PayloadSpooler
 	payloadBytes    int
+	fields          []trail.Option
+	pathNormalizer  PathNormalizer
 }
 
 func EventKind(kind string) Option {
@@ -60,6 +64,9 @@ func BodyPreview(limit int) Option {
 	}
 }
 func IncludeQuery(include bool) Option { return func(c *config) { c.includeQuery = include } }
+func NormalizePath(normalizer PathNormalizer) Option {
+	return func(c *config) { c.pathNormalizer = normalizer }
+}
 func CaptureHeaders(names ...string) Option {
 	return func(c *config) {
 		for _, name := range names {
@@ -94,6 +101,12 @@ func ClassifySuccess(classifier SuccessClassifier) Option {
 			c.success = classifier
 		}
 	}
+}
+
+// Fields attaches safe, static metadata such as provider and operation to
+// every HTTP event produced by the transport.
+func Fields(options ...trail.Option) Option {
+	return func(c *config) { c.fields = append(c.fields, options...) }
 }
 
 type transport struct {
@@ -145,6 +158,12 @@ func WithFlow(request *http.Request, id trail.FlowID) *http.Request {
 func WithExecution(request *http.Request, id trail.ExecutionID) *http.Request {
 	correlation := correlationFrom(request)
 	correlation.ExecutionID = id
+	return WithCorrelation(request, correlation)
+}
+
+func WithScope(request *http.Request, scopeType, scopeID string) *http.Request {
+	correlation := correlationFrom(request)
+	correlation.Scope = trail.Scope{Type: scopeType, ID: scopeID}
 	return WithCorrelation(request, correlation)
 }
 
@@ -280,11 +299,15 @@ func (t *transport) log(request *http.Request, response *http.Response, correlat
 		trail.Duration("http.duration", t.cfg.now().Sub(started)),
 		trail.Int64("http.request_size", requestSize),
 	}
+	options = append(options, t.cfg.fields...)
 	if !correlation.FlowID.IsZero() {
 		options = append(options, trail.Flow(correlation.FlowID))
 	}
 	if !correlation.ExecutionID.IsZero() {
 		options = append(options, trail.Execution(correlation.ExecutionID))
+	}
+	if !correlation.Scope.IsZero() {
+		options = append(options, trail.WithScope(correlation.Scope.Type, correlation.Scope.ID))
 	}
 	if correlation.EntityType != "" || correlation.EntityID != "" {
 		options = append(options, trail.Entity(correlation.EntityType, correlation.EntityID))
@@ -376,6 +399,10 @@ func (t *transport) requestPath(value *url.URL) string {
 	if value == nil {
 		return ""
 	}
+	path := value.EscapedPath()
+	if t.cfg.pathNormalizer != nil {
+		path = t.cfg.pathNormalizer(path)
+	}
 	if t.cfg.includeQuery && value.RawQuery != "" {
 		query := value.Query()
 		for key := range query {
@@ -383,7 +410,7 @@ func (t *transport) requestPath(value *url.URL) string {
 				query[key] = []string{"[REDACTED]"}
 			}
 		}
-		return value.EscapedPath() + "?" + query.Encode()
+		return path + "?" + query.Encode()
 	}
-	return value.EscapedPath()
+	return path
 }

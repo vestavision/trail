@@ -13,6 +13,8 @@ type Event struct {
 	RetryOfExecutionID ExecutionID
 	ExecutionAttempt   uint32
 	ExecutionSource    ExecutionSource
+	ScopeType          string
+	ScopeID            string
 	EntityType         string
 	EntityID           string
 	ParentID           EventID

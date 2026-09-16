@@ -20,6 +20,9 @@ const executionRows = `SELECT execution_id,service,environment,kind,source,statu
 func (s *Store) ListFlows(ctx context.Context, f storage.FlowFilter, p storage.PageRequest) (storage.Page[storage.FlowSummary], error) {
 	b := chWhere{}
 	commonCH(&b, f.Time, f.Service, f.Environment)
+	if !f.Scope.IsZero() {
+		b.add("flow_id IN (SELECT DISTINCT flow_id FROM trail_events WHERE scope_type=? AND scope_id=?)", f.Scope.Type, f.Scope.ID)
+	}
 	if f.Status != "" {
 		b.eq("status", f.Status)
 	}
@@ -72,6 +75,7 @@ func (s *Store) ListFlows(ctx context.Context, f storage.FlowFilter, p storage.P
 		if e != nil {
 			return storage.Page[storage.FlowSummary]{}, e
 		}
+		v.Scope = f.Scope
 		byID[string(v.ID[:])] = v
 	}
 	if e = summaryRows.Err(); e != nil {
@@ -103,12 +107,16 @@ func (s *Store) ListExecutionFlows(ctx context.Context, id trail.ExecutionID, f 
 func (s *Store) ListEntityFlows(ctx context.Context, key storage.EntityKey, f storage.FlowFilter, p storage.PageRequest) (storage.Page[storage.FlowSummary], error) {
 	f.EntityType = key.Type
 	f.EntityID = key.ID
+	f.Scope = key.Scope
 	return s.ListFlows(ctx, f, p)
 }
 
 func (s *Store) ListExecutions(ctx context.Context, f storage.ExecutionFilter, p storage.PageRequest) (storage.Page[storage.ExecutionSummary], error) {
 	b := chWhere{}
 	summaryCH(&b, f.Time, f.Service, f.Environment)
+	if !f.Scope.IsZero() {
+		b.add("execution_id IN (SELECT DISTINCT execution_id FROM trail_events WHERE scope_type=? AND scope_id=?)", f.Scope.Type, f.Scope.ID)
+	}
 	if f.Status != "" {
 		b.eq("status", f.Status)
 	}
@@ -131,6 +139,7 @@ func (s *Store) ListExecutions(ctx context.Context, f storage.ExecutionFilter, p
 		if e != nil {
 			return storage.Page[storage.ExecutionSummary]{}, e
 		}
+		v.Scope = f.Scope
 		items = append(items, v)
 	}
 	if e = rows.Err(); e != nil {
@@ -175,6 +184,7 @@ func (s *Store) GetRetryChain(ctx context.Context, id trail.ExecutionID) (storag
 func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p storage.PageRequest) (storage.Page[storage.EntitySummary], error) {
 	b := chWhere{}
 	commonCH(&b, f.Time, f.Service, f.Environment)
+	scopeCH(&b, f.Scope)
 	b.add("entity_type != '' AND entity_id != ''")
 	if f.EntityType != "" {
 		b.eq("entity_type", f.EntityType)
@@ -182,7 +192,7 @@ func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p st
 	if f.IDPrefix != "" {
 		b.add("startsWith(entity_id, ?)", f.IDPrefix)
 	}
-	q := `SELECT entity_type,entity_id,min(event_time),max(event_time),uniqExactIf(flow_id,flow_id!=unhex('00000000000000000000000000000000')) FROM trail_events` + b.sql() + ` GROUP BY entity_type,entity_id`
+	q := `SELECT scope_type,scope_id,entity_type,entity_id,min(event_time),max(event_time),uniqExactIf(flow_id,flow_id!=unhex('00000000000000000000000000000000')) FROM trail_events` + b.sql() + ` GROUP BY scope_type,scope_id,entity_type,entity_id`
 	if p.Cursor.ID != "" {
 		op := "<"
 		if !p.Desc {
@@ -200,7 +210,7 @@ func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p st
 	items := make([]storage.EntitySummary, 0, p.Limit+1)
 	for rows.Next() {
 		var v storage.EntitySummary
-		if e = rows.Scan(&v.Type, &v.ID, &v.FirstSeen, &v.LastSeen, &v.FlowCount); e != nil {
+		if e = rows.Scan(&v.Scope.Type, &v.Scope.ID, &v.Type, &v.ID, &v.FirstSeen, &v.LastSeen, &v.FlowCount); e != nil {
 			return storage.Page[storage.EntitySummary]{}, e
 		}
 		items = append(items, v)
@@ -212,7 +222,11 @@ func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p st
 }
 func (s *Store) GetEntity(ctx context.Context, key storage.EntityKey) (storage.EntityDetail, error) {
 	v := storage.EntitySummary{EntityKey: key}
-	e := s.conn.QueryRow(ctx, `SELECT min(event_time),max(event_time),uniqExactIf(flow_id,flow_id!=unhex('00000000000000000000000000000000')) FROM trail_events WHERE entity_type=? AND entity_id=? GROUP BY entity_type,entity_id`, key.Type, key.ID).Scan(&v.FirstSeen, &v.LastSeen, &v.FlowCount)
+	b := chWhere{}
+	b.eq("entity_type", key.Type)
+	b.eq("entity_id", key.ID)
+	scopeCH(&b, key.Scope)
+	e := s.conn.QueryRow(ctx, `SELECT min(event_time),max(event_time),uniqExactIf(flow_id,flow_id!=unhex('00000000000000000000000000000000')) FROM trail_events`+b.sql()+` GROUP BY entity_type,entity_id`, b.args...).Scan(&v.FirstSeen, &v.LastSeen, &v.FlowCount)
 	if errors.Is(e, sql.ErrNoRows) {
 		return storage.EntityDetail{}, storage.ErrNotFound
 	}
@@ -221,7 +235,7 @@ func (s *Store) GetEntity(ctx context.Context, key storage.EntityKey) (storage.E
 
 // FINAL makes event detail/list semantics idempotent during the interval before
 // ReplacingMergeTree has merged a JetStream redelivery.
-const eventRows = `SELECT event_time,event_id,batch_id,jetstream_stream,jetstream_stream_seq,jetstream_consumer,jetstream_consumer_seq,jetstream_delivered,received_at,service,environment,version,kind,toString(level),flow_id,execution_id,parent_execution_id,retry_of_execution_id,execution_attempt,execution_source,entity_type,entity_id,parent_event_id,flow_status,execution_status,execution_kind,field_keys,field_types,field_text,field_num,http_method,http_scheme,http_host,http_path,http_status_code,http_duration_ns,http_success,http_request_size,http_response_size,http_request_preview,http_response_preview,payload_refs_json FROM trail_events`
+const eventRows = `SELECT event_time,event_id,batch_id,jetstream_stream,jetstream_stream_seq,jetstream_consumer,jetstream_consumer_seq,jetstream_delivered,received_at,service,environment,version,kind,toString(level),flow_id,execution_id,parent_execution_id,retry_of_execution_id,execution_attempt,execution_source,scope_type,scope_id,entity_type,entity_id,parent_event_id,flow_status,execution_status,execution_kind,provider,has_error,field_keys,field_types,field_text,field_num,http_method,http_scheme,http_host,http_path,http_status_code,http_duration_ns,http_success,http_request_size,http_response_size,http_request_preview,http_response_preview,payload_refs_json FROM trail_events`
 
 func (s *Store) ListEvents(ctx context.Context, f storage.EventFilter, p storage.PageRequest) (storage.Page[storage.EventRecord], error) {
 	return s.listCHEvents(ctx, f, p, "", nil)
@@ -232,6 +246,7 @@ func (s *Store) ListFlowEvents(ctx context.Context, id trail.FlowID, f storage.E
 func (s *Store) listCHEvents(ctx context.Context, f storage.EventFilter, p storage.PageRequest, column string, value any) (storage.Page[storage.EventRecord], error) {
 	b := chWhere{}
 	commonCH(&b, f.Time, f.Service, f.Environment)
+	scopeCH(&b, f.Scope)
 	if column != "" {
 		b.eq(column, value)
 	}
@@ -243,6 +258,30 @@ func (s *Store) listCHEvents(ctx context.Context, f storage.EventFilter, p stora
 	}
 	if f.HTTPStatusClass > 0 {
 		b.add("http_status_code>=? AND http_status_code<?", f.HTTPStatusClass*100, (f.HTTPStatusClass+1)*100)
+	}
+	if f.HTTPMethod != "" {
+		b.eq("http_method", f.HTTPMethod)
+	}
+	if f.HTTPStatus > 0 {
+		b.eq("http_status_code", f.HTTPStatus)
+	}
+	if f.Provider != "" {
+		b.eq("provider", f.Provider)
+	}
+	if f.HasError != nil {
+		b.eq("has_error", boolByte(*f.HasError))
+	}
+	if !f.FlowID.IsZero() {
+		b.eq("flow_id", idBytes(f.FlowID))
+	}
+	if !f.ExecutionID.IsZero() {
+		b.eq("execution_id", idBytes(f.ExecutionID))
+	}
+	if f.EntityType != "" {
+		b.eq("entity_type", f.EntityType)
+	}
+	if f.EntityID != "" {
+		b.eq("entity_id", f.EntityID)
 	}
 	cursorCH(&b, p, "event_time", "event_id", true)
 	q, args := limitCH(eventRows+b.sql(), b.args, p, "event_time", "event_id")
@@ -276,6 +315,7 @@ func (s *Store) GetEvent(ctx context.Context, id trail.EventID) (storage.EventRe
 func (s *Store) Overview(ctx context.Context, f storage.OverviewFilter) (storage.Overview, error) {
 	b := chWhere{}
 	commonCH(&b, f.Time, f.Service, f.Environment)
+	scopeCH(&b, f.Scope)
 	v := storage.Overview{AsOf: time.Now().UTC()}
 	e := s.conn.QueryRow(ctx, `SELECT min(event_time),max(event_time),uniqExact(event_id),uniqExactIf(flow_id,flow_id!=unhex('00000000000000000000000000000000')),uniqExactIf(execution_id,execution_id!=unhex('00000000000000000000000000000000')),uniqExactIf(tuple(entity_type,entity_id),entity_type!='' AND entity_id!=''),uniqExactIf(flow_id,flow_status='failed'),uniqExactIf(execution_id,execution_status='failed'),uniqExactIf(event_id,http_status_code>=500) FROM trail_events`+b.sql(), b.args...).Scan(&v.FirstEvent, &v.LastEvent, &v.Events, &v.Flows, &v.Executions, &v.Entities, &v.FailedFlows, &v.FailedExecutions, &v.HTTP5xx)
 	return v, e
@@ -285,6 +325,7 @@ func (s *Store) OverviewActivity(ctx context.Context, f storage.OverviewActivity
 	out := storage.OverviewActivity{From: f.Time.From, To: f.Time.To, Interval: f.Interval, Buckets: []storage.ActivityBucket{}, FlowStatuses: []storage.CountByName{}, ExecutionSources: []storage.CountByName{}}
 	b := chWhere{}
 	commonCH(&b, f.Time, f.Service, f.Environment)
+	scopeCH(&b, f.Scope)
 	bucket := "toStartOfHour(event_time)"
 	if f.Interval == storage.ActivityDay {
 		bucket = "toStartOfDay(event_time)"
@@ -308,6 +349,9 @@ func (s *Store) OverviewActivity(ctx context.Context, f storage.OverviewActivity
 	rows.Close()
 	statusWhere := chWhere{}
 	commonCH(&statusWhere, f.Time, f.Service, f.Environment)
+	if !f.Scope.IsZero() {
+		statusWhere.add("flow_id IN (SELECT DISTINCT flow_id FROM trail_events WHERE scope_type=? AND scope_id=?)", f.Scope.Type, f.Scope.ID)
+	}
 	rows, err = s.conn.Query(ctx, `SELECT status,count() FROM trail_flow_terminals FINAL`+statusWhere.sql()+` GROUP BY status ORDER BY count() DESC`, statusWhere.args...)
 	if err != nil {
 		return out, err
@@ -327,6 +371,9 @@ func (s *Store) OverviewActivity(ctx context.Context, f storage.OverviewActivity
 	rows.Close()
 	summaryWhere := chWhere{}
 	summaryCH(&summaryWhere, f.Time, f.Service, f.Environment)
+	if !f.Scope.IsZero() {
+		summaryWhere.add("execution_id IN (SELECT DISTINCT execution_id FROM trail_events WHERE scope_type=? AND scope_id=?)", f.Scope.Type, f.Scope.ID)
+	}
 	rows, err = s.conn.Query(ctx, `SELECT source,count() FROM (`+executionRows+`)`+summaryWhere.sql()+` GROUP BY source ORDER BY count() DESC`, summaryWhere.args...)
 	if err != nil {
 		return out, err
@@ -373,7 +420,8 @@ func scanCHEvent(r rowScanner) (storage.EventRecord, error) {
 	var duration uint64
 	var status uint16
 	var success uint8
-	e := r.Scan(&v.Timestamp, &id, &batch, &v.Delivery.Stream, &v.Delivery.StreamSequence, &v.Delivery.Consumer, &v.Delivery.ConsumerSequence, &v.Delivery.Delivered, &v.Delivery.ReceivedAt, &v.Metadata.Service, &v.Metadata.Environment, &v.Metadata.Version, &v.Kind, &level, &flow, &execution, &parentExecution, &retry, &v.ExecutionAttempt, &source, &v.EntityType, &v.EntityID, &parent, &v.FlowStatus, &v.ExecutionStatus, &v.ExecutionKind, &keys, &types, &texts, &nums, &v.HTTP.Method, &v.HTTP.Scheme, &v.HTTP.Host, &v.HTTP.Path, &status, &duration, &success, &v.HTTP.RequestSize, &v.HTTP.ResponseSize, &v.HTTP.RequestPreview, &v.HTTP.ResponsePreview, &payloadJSON)
+	var hasError uint8
+	e := r.Scan(&v.Timestamp, &id, &batch, &v.Delivery.Stream, &v.Delivery.StreamSequence, &v.Delivery.Consumer, &v.Delivery.ConsumerSequence, &v.Delivery.Delivered, &v.Delivery.ReceivedAt, &v.Metadata.Service, &v.Metadata.Environment, &v.Metadata.Version, &v.Kind, &level, &flow, &execution, &parentExecution, &retry, &v.ExecutionAttempt, &source, &v.Scope.Type, &v.Scope.ID, &v.EntityType, &v.EntityID, &parent, &v.FlowStatus, &v.ExecutionStatus, &v.ExecutionKind, &v.Provider, &hasError, &keys, &types, &texts, &nums, &v.HTTP.Method, &v.HTTP.Scheme, &v.HTTP.Host, &v.HTTP.Path, &status, &duration, &success, &v.HTTP.RequestSize, &v.HTTP.ResponseSize, &v.HTTP.RequestPreview, &v.HTTP.ResponsePreview, &payloadJSON)
 	if e != nil {
 		return v, e
 	}
@@ -389,6 +437,7 @@ func scanCHEvent(r rowScanner) (storage.EventRecord, error) {
 	v.HTTP.Duration = time.Duration(duration)
 	v.HTTP.StatusCode = int(status)
 	v.HTTP.Success = success != 0
+	v.HasError = hasError != 0
 	v.Fields = make([]wire.Field, len(keys))
 	for i := range keys {
 		v.Fields[i] = wire.Field{Key: keys[i], Type: types[i], Text: texts[i], Num: nums[i]}
@@ -438,6 +487,14 @@ func commonCH(b *chWhere, t storage.TimeRange, service, environment string) {
 	if environment != "" {
 		b.eq("environment", environment)
 	}
+}
+
+func scopeCH(b *chWhere, scope trail.Scope) {
+	if scope.IsZero() {
+		return
+	}
+	b.eq("scope_type", scope.Type)
+	b.eq("scope_id", scope.ID)
 }
 func summaryCH(b *chWhere, t storage.TimeRange, service, environment string) {
 	if !t.From.IsZero() {

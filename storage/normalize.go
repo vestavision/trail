@@ -35,6 +35,7 @@ func normalizeEvent(event wire.Event, metadata trail.Metadata, batchID trail.Eve
 	record := EventRecord{
 		ID: id, Timestamp: time.Unix(0, event.TimestampUnixNano).UTC(), Kind: event.Kind,
 		ExecutionAttempt: event.ExecutionAttempt, ExecutionSource: trail.ExecutionSource(event.ExecutionSource),
+		Scope:      trail.Scope{Type: event.ScopeType, ID: event.ScopeID},
 		EntityType: event.EntityType, EntityID: event.EntityID, Fields: append([]wire.Field(nil), event.Fields...),
 		BatchID: batchID, Metadata: metadata, Delivery: delivery,
 	}
@@ -66,6 +67,8 @@ func normalizeEvent(event wire.Event, metadata trail.Metadata, batchID trail.Eve
 			record.ExecutionKind = field.Text
 		case convention.FieldRetentionClass:
 			record.RetentionClass = field.Text
+		case "provider":
+			record.Provider = field.Text
 		case "http.method":
 			record.HTTP.Method = field.Text
 		case "http.scheme":
@@ -89,6 +92,9 @@ func normalizeEvent(event wire.Event, metadata trail.Metadata, batchID trail.Eve
 		case "http.response_preview":
 			record.HTTP.ResponsePreview = field.Text
 		default:
+			if field.Type == "error" {
+				record.HasError = true
+			}
 			if strings.HasPrefix(field.Key, "payload.") {
 				applyPayloadField(payloads, field)
 			}

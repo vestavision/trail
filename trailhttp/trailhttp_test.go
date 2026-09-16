@@ -48,11 +48,12 @@ func TestCompletedResponsePreservesBodyAndCorrelation(t *testing.T) {
 			Body: io.NopCloser(strings.NewReader("response-body")), Request: request,
 		}, nil
 	})
-	client := &http.Client{Transport: Wrap(base, BodyPreview(8), CaptureHeaders("X-Api-Key"))}
+	client := &http.Client{Transport: Wrap(base, BodyPreview(8), CaptureHeaders("X-Api-Key"), Fields(trail.String("provider", "inventory")))}
 	request, _ := http.NewRequest(http.MethodPost, "https://api.example/orders?token=secret", strings.NewReader("request-secret"))
 	flow, execution := trail.NewFlow(), trail.NewExecution()
 	request = WithFlow(request, flow)
 	request = WithExecution(request, execution)
+	request = WithScope(request, "tenant", "tenant_1")
 	request = WithEntity(request, "order", "order_1")
 	response, err := client.Do(request)
 	if err != nil {
@@ -73,7 +74,7 @@ func TestCompletedResponsePreservesBodyAndCorrelation(t *testing.T) {
 		t.Fatalf("events=%d", len(events))
 	}
 	event := events[0]
-	if event.FlowID != flow || event.ExecutionID != execution || event.EntityType != "order" || event.EntityID != "order_1" {
+	if event.FlowID != flow || event.ExecutionID != execution || event.ScopeType != "tenant" || event.ScopeID != "tenant_1" || event.EntityType != "order" || event.EntityID != "order_1" {
 		t.Fatalf("correlation=%+v", event)
 	}
 	path, _ := field(event, "http.path")
@@ -81,7 +82,8 @@ func TestCompletedResponsePreservesBodyAndCorrelation(t *testing.T) {
 	requestPreview, _ := field(event, "http.request_preview")
 	responsePreview, _ := field(event, "http.response_preview")
 	header, _ := field(event, "http.response.header.x-api-key")
-	if path.Text() != "/orders" || status.Int64() != 201 || requestPreview.Text() != "request-" || responsePreview.Text() != "response" || header.Text() != "[REDACTED]" {
+	provider, _ := field(event, "provider")
+	if path.Text() != "/orders" || status.Int64() != 201 || requestPreview.Text() != "request-" || responsePreview.Text() != "response" || header.Text() != "[REDACTED]" || provider.Text() != "inventory" {
 		t.Fatalf("event fields=%+v", event.Fields)
 	}
 }
@@ -129,7 +131,7 @@ func TestResponseEOFAndCloseEmitOnce(t *testing.T) {
 }
 
 func TestNilRequestCorrelation(t *testing.T) {
-	if WithCorrelation(nil, Correlation{}) != nil || WithFlow(nil, trail.FlowID{}) != nil {
+	if WithCorrelation(nil, Correlation{}) != nil || WithFlow(nil, trail.FlowID{}) != nil || WithScope(nil, "tenant", "tenant_1") != nil {
 		t.Fatal("nil request was not preserved")
 	}
 }

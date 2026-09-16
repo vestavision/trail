@@ -62,7 +62,7 @@ func TestLogBuildsEventAndCloseDrains(t *testing.T) {
 	initTestWriter(t, Config{Service: "order-worker", Environment: "test", Version: "v1", Sink: sink, BatchSize: 64, FlushInterval: time.Hour})
 	flow, execution := NewFlow(), NewExecution()
 	parent := newEventID()
-	Log("order.fulfillment", Flow(flow), Execution(execution), Entity("order", "order_1"), Parent(parent), WithLevel(LevelWarn), String("warehouse", "warehouse-a"), Int("available_units", 97))
+	Log("order.fulfillment", Flow(flow), Execution(execution), WithScope("tenant", "tenant_1"), Entity("order", "order_1"), Parent(parent), WithLevel(LevelWarn), String("warehouse", "warehouse-a"), Int("available_units", 97))
 	if err := Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestLogBuildsEventAndCloseDrains(t *testing.T) {
 	if event.ID.IsZero() || event.Timestamp == 0 || event.Kind != "order.fulfillment" || event.Level != LevelWarn {
 		t.Fatalf("bad core event: %+v", event)
 	}
-	if event.FlowID != flow || event.ExecutionID != execution || event.ParentID != parent || event.EntityType != "order" || event.EntityID != "order_1" {
+	if event.FlowID != flow || event.ExecutionID != execution || event.ParentID != parent || event.ScopeType != "tenant" || event.ScopeID != "tenant_1" || event.EntityType != "order" || event.EntityID != "order_1" {
 		t.Fatalf("bad correlation: %+v", event)
 	}
 	if len(event.Fields) != 2 || batches[0].Metadata.Service != "order-worker" || batches[0].Metadata.Environment != "test" {

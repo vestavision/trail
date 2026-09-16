@@ -68,6 +68,7 @@ type EventRecord struct {
 	RetryOfExecutionID trail.ExecutionID
 	ExecutionAttempt   uint32
 	ExecutionSource    trail.ExecutionSource
+	Scope              trail.Scope
 	EntityType         string
 	EntityID           string
 	ParentID           trail.EventID
@@ -76,6 +77,8 @@ type EventRecord struct {
 	ExecutionStatus    string
 	ExecutionKind      string
 	RetentionClass     string
+	Provider           string
+	HasError           bool
 	HTTP               HTTPRecord
 	Payloads           []PayloadLink
 	BatchID            trail.EventID
@@ -118,6 +121,7 @@ type FlowFilter struct {
 	EntityType  string
 	EntityID    string
 	ExecutionID trail.ExecutionID
+	Scope       trail.Scope
 }
 
 type ExecutionFilter struct {
@@ -127,6 +131,7 @@ type ExecutionFilter struct {
 	Status      string
 	Source      trail.ExecutionSource
 	Kind        string
+	Scope       trail.Scope
 }
 
 type EntityFilter struct {
@@ -135,6 +140,7 @@ type EntityFilter struct {
 	Environment string
 	EntityType  string
 	IDPrefix    string
+	Scope       trail.Scope
 }
 
 type EventFilter struct {
@@ -144,12 +150,22 @@ type EventFilter struct {
 	Kind            string
 	Level           *trail.Level
 	HTTPStatusClass int
+	HTTPMethod      string
+	HTTPStatus      int
+	Provider        string
+	HasError        *bool
+	FlowID          trail.FlowID
+	ExecutionID     trail.ExecutionID
+	EntityType      string
+	EntityID        string
+	Scope           trail.Scope
 }
 
 type OverviewFilter struct {
 	Time        TimeRange
 	Service     string
 	Environment string
+	Scope       trail.Scope
 }
 
 type ActivityInterval string
@@ -168,6 +184,7 @@ type FlowSummary struct {
 	ID          trail.FlowID
 	Service     string
 	Environment string
+	Scope       trail.Scope
 	EntityType  string
 	EntityID    string
 	ExecutionID trail.ExecutionID
@@ -187,6 +204,7 @@ type ExecutionSummary struct {
 	ID                 trail.ExecutionID
 	Service            string
 	Environment        string
+	Scope              trail.Scope
 	Kind               string
 	Source             trail.ExecutionSource
 	Status             string
@@ -206,8 +224,9 @@ type RetryChain struct {
 }
 
 type EntityKey struct {
-	Type string
-	ID   string
+	Scope trail.Scope
+	Type  string
+	ID    string
 }
 
 type EntitySummary struct {

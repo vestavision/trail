@@ -86,6 +86,8 @@ func Log(kind string, options ...Option) {
 			event.FlowID = FlowID(option.id)
 		case optionExecution:
 			event.ExecutionID = ExecutionID(option.id)
+		case optionScope:
+			event.ScopeType, event.ScopeID = option.entityType, option.entityID
 		case optionEntity:
 			event.EntityType, event.EntityID = option.entityType, option.entityID
 		case optionParent:

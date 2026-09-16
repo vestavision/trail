@@ -208,6 +208,9 @@ func (s *Server) flow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, e := s.cfg.Store.GetFlow(r.Context(), id)
+	if e == nil && !scopeAllowed(scopeFilter(r), v.Scope) {
+		e = storage.ErrNotFound
+	}
 	respond(w, v, e)
 }
 func (s *Server) flowEvents(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +243,9 @@ func (s *Server) execution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, e := s.cfg.Store.GetExecution(r.Context(), id)
+	if e == nil && !scopeAllowed(scopeFilter(r), v.Scope) {
+		e = storage.ErrNotFound
+	}
 	respond(w, v, e)
 }
 func (s *Server) executionFlows(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +271,15 @@ func (s *Server) retries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, e := s.cfg.Store.GetRetryChain(r.Context(), id)
+	if e == nil {
+		requested := scopeFilter(r)
+		for _, execution := range v.Executions {
+			if !scopeAllowed(requested, execution.Scope) {
+				e = storage.ErrNotFound
+				break
+			}
+		}
+	}
 	respond(w, v, e)
 }
 func (s *Server) entities(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +292,7 @@ func (s *Server) entities(w http.ResponseWriter, r *http.Request) {
 	respondPage(w, v, e)
 }
 func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
-	key := storage.EntityKey{Type: r.PathValue("type"), ID: r.PathValue("id")}
+	key := storage.EntityKey{Scope: scopeFilter(r), Type: r.PathValue("type"), ID: r.PathValue("id")}
 	if key.Type == "" || key.ID == "" {
 		bad(w, errors.New("entity type and ID are required"))
 		return
@@ -286,7 +301,7 @@ func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
 	respond(w, v, e)
 }
 func (s *Server) entityFlows(w http.ResponseWriter, r *http.Request) {
-	key := storage.EntityKey{Type: r.PathValue("type"), ID: r.PathValue("id")}
+	key := storage.EntityKey{Scope: scopeFilter(r), Type: r.PathValue("type"), ID: r.PathValue("id")}
 	p, e := page(r)
 	if e != nil {
 		bad(w, e)
@@ -311,6 +326,9 @@ func (s *Server) event(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, e := s.cfg.Store.GetEvent(r.Context(), id)
+	if e == nil && !scopeAllowed(scopeFilter(r), v.Scope) {
+		e = storage.ErrNotFound
+	}
 	respond(w, v, e)
 }
 
@@ -323,6 +341,10 @@ func (s *Server) eventPayload(w http.ResponseWriter, r *http.Request) {
 	event, err := s.cfg.Store.GetEvent(r.Context(), id)
 	if err != nil {
 		respond(w, nil, err)
+		return
+	}
+	if !scopeAllowed(scopeFilter(r), event.Scope) {
+		respond(w, nil, storage.ErrNotFound)
 		return
 	}
 	var link *storage.PayloadLink
@@ -402,7 +424,7 @@ func timeRange(r *http.Request) storage.TimeRange {
 }
 func overviewFilter(r *http.Request) storage.OverviewFilter {
 	q := r.URL.Query()
-	return storage.OverviewFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment")}
+	return storage.OverviewFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Scope: scopeFilter(r)}
 }
 func overviewActivityFilter(r *http.Request) (storage.OverviewActivityFilter, error) {
 	base := overviewFilter(r)
@@ -420,7 +442,7 @@ func overviewActivityFilter(r *http.Request) (storage.OverviewActivityFilter, er
 }
 func flowFilter(r *http.Request) storage.FlowFilter {
 	q := r.URL.Query()
-	f := storage.FlowFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Status: q.Get("status"), EntityType: q.Get("entity_type"), EntityID: q.Get("entity_id")}
+	f := storage.FlowFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Status: q.Get("status"), EntityType: q.Get("entity_type"), EntityID: q.Get("entity_id"), Scope: scopeFilter(r)}
 	if x := q.Get("execution_id"); x != "" {
 		f.ExecutionID, _ = trail.ParseExecutionID(x)
 	}
@@ -428,15 +450,15 @@ func flowFilter(r *http.Request) storage.FlowFilter {
 }
 func executionFilter(r *http.Request) storage.ExecutionFilter {
 	q := r.URL.Query()
-	return storage.ExecutionFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Status: q.Get("status"), Source: trail.ExecutionSource(q.Get("source")), Kind: q.Get("kind")}
+	return storage.ExecutionFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Status: q.Get("status"), Source: trail.ExecutionSource(q.Get("source")), Kind: q.Get("kind"), Scope: scopeFilter(r)}
 }
 func entityFilter(r *http.Request) storage.EntityFilter {
 	q := r.URL.Query()
-	return storage.EntityFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), EntityType: q.Get("entity_type"), IDPrefix: q.Get("q")}
+	return storage.EntityFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), EntityType: q.Get("entity_type"), IDPrefix: q.Get("q"), Scope: scopeFilter(r)}
 }
 func eventFilter(r *http.Request) storage.EventFilter {
 	q := r.URL.Query()
-	f := storage.EventFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Kind: q.Get("kind")}
+	f := storage.EventFilter{Time: timeRange(r), Service: q.Get("service"), Environment: q.Get("environment"), Kind: q.Get("kind"), Scope: scopeFilter(r), HTTPMethod: q.Get("http_method"), Provider: q.Get("provider"), EntityType: q.Get("entity_type"), EntityID: q.Get("entity_id")}
 	if raw := q.Get("http_status_class"); raw != "" {
 		f.HTTPStatusClass, _ = strconv.Atoi(raw)
 	}
@@ -444,7 +466,31 @@ func eventFilter(r *http.Request) storage.EventFilter {
 		l := parseLevel(raw)
 		f.Level = &l
 	}
+	if raw := q.Get("http_status"); raw != "" {
+		f.HTTPStatus, _ = strconv.Atoi(raw)
+	}
+	if raw := q.Get("has_error"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err == nil {
+			f.HasError = &value
+		}
+	}
+	if raw := q.Get("flow_id"); raw != "" {
+		f.FlowID, _ = trail.ParseFlowID(raw)
+	}
+	if raw := q.Get("execution_id"); raw != "" {
+		f.ExecutionID, _ = trail.ParseExecutionID(raw)
+	}
 	return f
+}
+
+func scopeFilter(r *http.Request) trail.Scope {
+	q := r.URL.Query()
+	return trail.Scope{Type: q.Get("scope_type"), ID: q.Get("scope_id")}
+}
+
+func scopeAllowed(requested, actual trail.Scope) bool {
+	return requested.IsZero() || requested == actual
 }
 func parseLevel(s string) trail.Level {
 	switch s {

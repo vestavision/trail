@@ -14,6 +14,8 @@ import (
 )
 
 const flowSummarySelect = `SELECT flow_id, service, environment,
+ COALESCE((array_agg(scope_type ORDER BY event_time DESC,event_id DESC) FILTER(WHERE scope_type<>''))[1],''),
+ COALESCE((array_agg(scope_id ORDER BY event_time DESC,event_id DESC) FILTER(WHERE scope_id<>''))[1],''),
  COALESCE((array_agg(entity_type ORDER BY event_time DESC,event_id DESC) FILTER(WHERE entity_type<>''))[1],''),
  COALESCE((array_agg(entity_id ORDER BY event_time DESC,event_id DESC) FILTER(WHERE entity_id<>''))[1],''),
  COALESCE((array_agg(execution_id ORDER BY event_time DESC,event_id DESC) FILTER(WHERE execution_id IS NOT NULL))[1],decode(repeat('00',16),'hex')),
@@ -25,6 +27,7 @@ const flowSummarySelect = `SELECT flow_id, service, environment,
 func (s *Store) ListFlows(ctx context.Context, f storage.FlowFilter, p storage.PageRequest) (storage.Page[storage.FlowSummary], error) {
 	b := newWhere(1)
 	applyCommon(b, f.Time, f.Service, f.Environment)
+	applyScope(b, f.Scope)
 	b.add("flow_id IS NOT NULL")
 	if f.EntityType != "" {
 		b.eq("entity_type", f.EntityType)
@@ -81,6 +84,8 @@ func (s *Store) ListEntityFlows(ctx context.Context, key storage.EntityKey, f st
 }
 
 const executionSummarySelect = `SELECT execution_id,service,environment,
+ COALESCE((array_agg(scope_type ORDER BY event_time DESC,event_id DESC) FILTER(WHERE scope_type<>''))[1],''),
+ COALESCE((array_agg(scope_id ORDER BY event_time DESC,event_id DESC) FILTER(WHERE scope_id<>''))[1],''),
  COALESCE((array_agg(execution_kind ORDER BY event_time DESC,event_id DESC) FILTER(WHERE execution_kind<>''))[1],''),
  COALESCE((array_agg(execution_source ORDER BY event_time DESC,event_id DESC) FILTER(WHERE execution_source<>''))[1],''),
  COALESCE((array_agg(execution_status ORDER BY event_time DESC,event_id DESC) FILTER(WHERE execution_status<>''))[1],''),max(execution_attempt),
@@ -92,6 +97,7 @@ const executionSummarySelect = `SELECT execution_id,service,environment,
 func (s *Store) ListExecutions(ctx context.Context, f storage.ExecutionFilter, p storage.PageRequest) (storage.Page[storage.ExecutionSummary], error) {
 	b := newWhere(1)
 	applyCommon(b, f.Time, f.Service, f.Environment)
+	applyScope(b, f.Scope)
 	b.add("execution_id IS NOT NULL")
 	if f.Source != "" {
 		b.eq("execution_source", string(f.Source))
@@ -161,6 +167,7 @@ func (s *Store) GetRetryChain(ctx context.Context, id trail.ExecutionID) (storag
 func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p storage.PageRequest) (storage.Page[storage.EntitySummary], error) {
 	b := newWhere(0)
 	applyCommon(b, f.Time, f.Service, f.Environment)
+	applyScope(b, f.Scope)
 	b.add("entity_type<>'' AND entity_id<>''")
 	if f.EntityType != "" {
 		b.eq("entity_type", f.EntityType)
@@ -169,7 +176,7 @@ func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p st
 		b.args = append(b.args, f.IDPrefix+"%")
 		b.add(fmt.Sprintf("entity_id LIKE $%d", len(b.args)))
 	}
-	q := `SELECT entity_type,entity_id,min(event_time),max(event_time),count(DISTINCT flow_id) FILTER(WHERE flow_id IS NOT NULL) FROM trail_events` + b.sql() + ` GROUP BY entity_type,entity_id`
+	q := `SELECT scope_type,scope_id,entity_type,entity_id,min(event_time),max(event_time),count(DISTINCT flow_id) FILTER(WHERE flow_id IS NOT NULL) FROM trail_events` + b.sql() + ` GROUP BY scope_type,scope_id,entity_type,entity_id`
 	args := b.args
 	if p.Cursor.ID != "" {
 		op := "<"
@@ -193,7 +200,7 @@ func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p st
 	items := make([]storage.EntitySummary, 0, p.Limit+1)
 	for rows.Next() {
 		var v storage.EntitySummary
-		if e = rows.Scan(&v.Type, &v.ID, &v.FirstSeen, &v.LastSeen, &v.FlowCount); e != nil {
+		if e = rows.Scan(&v.Scope.Type, &v.Scope.ID, &v.Type, &v.ID, &v.FirstSeen, &v.LastSeen, &v.FlowCount); e != nil {
 			return storage.Page[storage.EntitySummary]{}, e
 		}
 		v.FirstSeen = v.FirstSeen.UTC()
@@ -208,7 +215,11 @@ func (s *Store) SearchEntities(ctx context.Context, f storage.EntityFilter, p st
 func (s *Store) GetEntity(ctx context.Context, key storage.EntityKey) (storage.EntityDetail, error) {
 	var v storage.EntitySummary
 	v.EntityKey = key
-	e := s.pool.QueryRow(ctx, `SELECT min(event_time),max(event_time),count(DISTINCT flow_id) FILTER(WHERE flow_id IS NOT NULL) FROM trail_events WHERE entity_type=$1 AND entity_id=$2 GROUP BY entity_type,entity_id`, key.Type, key.ID).Scan(&v.FirstSeen, &v.LastSeen, &v.FlowCount)
+	b := newWhere(0)
+	b.eq("entity_type", key.Type)
+	b.eq("entity_id", key.ID)
+	applyScope(b, key.Scope)
+	e := s.pool.QueryRow(ctx, `SELECT min(event_time),max(event_time),count(DISTINCT flow_id) FILTER(WHERE flow_id IS NOT NULL) FROM trail_events`+b.sql()+` GROUP BY entity_type,entity_id`, b.args...).Scan(&v.FirstSeen, &v.LastSeen, &v.FlowCount)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return storage.EntityDetail{}, storage.ErrNotFound
 	}
@@ -217,17 +228,18 @@ func (s *Store) GetEntity(ctx context.Context, key storage.EntityKey) (storage.E
 	return storage.EntityDetail{EntitySummary: v}, e
 }
 
-const eventSelect = `SELECT event_time,event_id,batch_id,jetstream_stream,jetstream_stream_seq,jetstream_consumer,jetstream_consumer_seq,jetstream_delivered,received_at,service,environment,version,kind,level,flow_id,execution_id,parent_execution_id,retry_of_execution_id,execution_attempt,execution_source,entity_type,entity_id,parent_event_id,flow_status,execution_status,execution_kind,fields,http_method,http_scheme,http_host,http_path,http_status_code,http_duration_ns,http_success,http_request_size,http_response_size,http_request_preview,http_response_preview,payload_refs FROM trail_events`
+const eventSelect = `SELECT event_time,event_id,batch_id,jetstream_stream,jetstream_stream_seq,jetstream_consumer,jetstream_consumer_seq,jetstream_delivered,received_at,service,environment,version,kind,level,flow_id,execution_id,parent_execution_id,retry_of_execution_id,execution_attempt,execution_source,scope_type,scope_id,entity_type,entity_id,parent_event_id,flow_status,execution_status,execution_kind,provider,has_error,fields,http_method,http_scheme,http_host,http_path,http_status_code,http_duration_ns,http_success,http_request_size,http_response_size,http_request_preview,http_response_preview,payload_refs FROM trail_events`
 
 func (s *Store) ListEvents(ctx context.Context, f storage.EventFilter, p storage.PageRequest) (storage.Page[storage.EventRecord], error) {
-	return s.listEvents(ctx, f, p, "")
+	return s.listEvents(ctx, f, p, "", nil)
 }
 func (s *Store) ListFlowEvents(ctx context.Context, id trail.FlowID, f storage.EventFilter, p storage.PageRequest) (storage.Page[storage.EventRecord], error) {
 	return s.listEvents(ctx, f, p, "flow_id", idBytes(id))
 }
-func (s *Store) listEvents(ctx context.Context, f storage.EventFilter, p storage.PageRequest, extra ...any) (storage.Page[storage.EventRecord], error) {
+func (s *Store) listEvents(ctx context.Context, f storage.EventFilter, p storage.PageRequest, extraColumn string, extraValue any) (storage.Page[storage.EventRecord], error) {
 	b := newWhere(0)
 	applyCommon(b, f.Time, f.Service, f.Environment)
+	applyScope(b, f.Scope)
 	if f.Kind != "" {
 		b.eq("kind", f.Kind)
 	}
@@ -238,8 +250,32 @@ func (s *Store) listEvents(ctx context.Context, f storage.EventFilter, p storage
 		b.args = append(b.args, f.HTTPStatusClass*100, (f.HTTPStatusClass+1)*100)
 		b.add(fmt.Sprintf("http_status_code >= $%d AND http_status_code < $%d", len(b.args)-1, len(b.args)))
 	}
-	if len(extra) > 0 {
-		b.eq(extra[0].(string), extra[1])
+	if f.HTTPMethod != "" {
+		b.eq("http_method", f.HTTPMethod)
+	}
+	if f.HTTPStatus > 0 {
+		b.eq("http_status_code", f.HTTPStatus)
+	}
+	if f.Provider != "" {
+		b.eq("provider", f.Provider)
+	}
+	if f.HasError != nil {
+		b.eq("has_error", *f.HasError)
+	}
+	if !f.FlowID.IsZero() {
+		b.eq("flow_id", idBytes(f.FlowID))
+	}
+	if !f.ExecutionID.IsZero() {
+		b.eq("execution_id", idBytes(f.ExecutionID))
+	}
+	if f.EntityType != "" {
+		b.eq("entity_type", f.EntityType)
+	}
+	if f.EntityID != "" {
+		b.eq("entity_id", f.EntityID)
+	}
+	if extraColumn != "" {
+		b.eq(extraColumn, extraValue)
 	}
 	applyCursor(b, p, "event_time", "event_id")
 	order := "DESC"
@@ -279,6 +315,7 @@ func (s *Store) GetEvent(ctx context.Context, id trail.EventID) (storage.EventRe
 func (s *Store) Overview(ctx context.Context, f storage.OverviewFilter) (storage.Overview, error) {
 	b := newWhere(0)
 	applyCommon(b, f.Time, f.Service, f.Environment)
+	applyScope(b, f.Scope)
 	q := `SELECT COALESCE(min(event_time),now()),COALESCE(max(event_time),now()),count(*),count(DISTINCT flow_id) FILTER(WHERE flow_id IS NOT NULL),count(DISTINCT execution_id) FILTER(WHERE execution_id IS NOT NULL),count(DISTINCT (entity_type,entity_id)) FILTER(WHERE entity_type<>'' AND entity_id<>''),count(DISTINCT flow_id) FILTER(WHERE flow_status='failed'),count(DISTINCT execution_id) FILTER(WHERE execution_status='failed'),count(*) FILTER(WHERE http_status_code>=500) FROM trail_events` + b.sql()
 	v := storage.Overview{AsOf: time.Now().UTC()}
 	e := s.pool.QueryRow(ctx, q, b.args...).Scan(&v.FirstEvent, &v.LastEvent, &v.Events, &v.Flows, &v.Executions, &v.Entities, &v.FailedFlows, &v.FailedExecutions, &v.HTTP5xx)
@@ -289,6 +326,7 @@ func (s *Store) OverviewActivity(ctx context.Context, f storage.OverviewActivity
 	out := storage.OverviewActivity{From: f.Time.From, To: f.Time.To, Interval: f.Interval, Buckets: []storage.ActivityBucket{}, FlowStatuses: []storage.CountByName{}, ExecutionSources: []storage.CountByName{}}
 	b := newWhere(0)
 	applyCommon(b, f.Time, f.Service, f.Environment)
+	applyScope(b, f.Scope)
 	unit := "hour"
 	if f.Interval == storage.ActivityDay {
 		unit = "day"
@@ -313,6 +351,7 @@ func (s *Store) OverviewActivity(ctx context.Context, f storage.OverviewActivity
 	rows.Close()
 	flows := newWhere(0)
 	applyCommon(flows, f.Time, f.Service, f.Environment)
+	applyScope(flows, f.Scope)
 	flows.add("flow_id IS NOT NULL AND flow_status<>''")
 	rows, err = s.pool.Query(ctx, `SELECT status,count(*) FROM (SELECT DISTINCT ON (flow_id) flow_id,flow_status status FROM trail_events`+flows.sql()+` ORDER BY flow_id,event_time DESC,event_id DESC) flows GROUP BY status ORDER BY count(*) DESC`, flows.args...)
 	if err != nil {
@@ -333,6 +372,7 @@ func (s *Store) OverviewActivity(ctx context.Context, f storage.OverviewActivity
 	rows.Close()
 	executions := newWhere(0)
 	applyCommon(executions, f.Time, f.Service, f.Environment)
+	applyScope(executions, f.Scope)
 	executions.add("execution_id IS NOT NULL AND execution_source<>''")
 	rows, err = s.pool.Query(ctx, `SELECT source,count(*) FROM (SELECT DISTINCT ON (execution_id) execution_id,execution_source source FROM trail_events`+executions.sql()+` ORDER BY execution_id,event_time DESC,event_id DESC) executions GROUP BY source ORDER BY count(*) DESC`, executions.args...)
 	if err != nil {
@@ -355,7 +395,7 @@ func scanFlow(row scanner) (storage.FlowSummary, string, string, error) {
 	var v storage.FlowSummary
 	var id, exec []byte
 	var first, last string
-	e := row.Scan(&id, &v.Service, &v.Environment, &v.EntityType, &v.EntityID, &exec, &v.Status, &v.StartedAt, &v.FinishedAt, &v.EventCount, &first, &last)
+	e := row.Scan(&id, &v.Service, &v.Environment, &v.Scope.Type, &v.Scope.ID, &v.EntityType, &v.EntityID, &exec, &v.Status, &v.StartedAt, &v.FinishedAt, &v.EventCount, &first, &last)
 	copy(v.ID[:], id)
 	copy(v.ExecutionID[:], exec)
 	v.StartedAt = v.StartedAt.UTC()
@@ -366,7 +406,7 @@ func scanExecution(row scanner) (storage.ExecutionSummary, error) {
 	var v storage.ExecutionSummary
 	var id, parent, retry []byte
 	var source string
-	e := row.Scan(&id, &v.Service, &v.Environment, &v.Kind, &source, &v.Status, &v.Attempt, &parent, &retry, &v.StartedAt, &v.FinishedAt, &v.EventCount, &v.FlowCount)
+	e := row.Scan(&id, &v.Service, &v.Environment, &v.Scope.Type, &v.Scope.ID, &v.Kind, &source, &v.Status, &v.Attempt, &parent, &retry, &v.StartedAt, &v.FinishedAt, &v.EventCount, &v.FlowCount)
 	copy(v.ID[:], id)
 	copy(v.ParentExecutionID[:], parent)
 	copy(v.RetryOfExecutionID[:], retry)
@@ -381,7 +421,7 @@ func scanEvent(row scanner) (storage.EventRecord, error) {
 	var level, source string
 	var fields, payloads []byte
 	var duration int64
-	e := row.Scan(&v.Timestamp, &id, &batch, &v.Delivery.Stream, &v.Delivery.StreamSequence, &v.Delivery.Consumer, &v.Delivery.ConsumerSequence, &v.Delivery.Delivered, &v.Delivery.ReceivedAt, &v.Metadata.Service, &v.Metadata.Environment, &v.Metadata.Version, &v.Kind, &level, &flow, &exec, &parentExec, &retry, &v.ExecutionAttempt, &source, &v.EntityType, &v.EntityID, &parent, &v.FlowStatus, &v.ExecutionStatus, &v.ExecutionKind, &fields, &v.HTTP.Method, &v.HTTP.Scheme, &v.HTTP.Host, &v.HTTP.Path, &v.HTTP.StatusCode, &duration, &v.HTTP.Success, &v.HTTP.RequestSize, &v.HTTP.ResponseSize, &v.HTTP.RequestPreview, &v.HTTP.ResponsePreview, &payloads)
+	e := row.Scan(&v.Timestamp, &id, &batch, &v.Delivery.Stream, &v.Delivery.StreamSequence, &v.Delivery.Consumer, &v.Delivery.ConsumerSequence, &v.Delivery.Delivered, &v.Delivery.ReceivedAt, &v.Metadata.Service, &v.Metadata.Environment, &v.Metadata.Version, &v.Kind, &level, &flow, &exec, &parentExec, &retry, &v.ExecutionAttempt, &source, &v.Scope.Type, &v.Scope.ID, &v.EntityType, &v.EntityID, &parent, &v.FlowStatus, &v.ExecutionStatus, &v.ExecutionKind, &v.Provider, &v.HasError, &fields, &v.HTTP.Method, &v.HTTP.Scheme, &v.HTTP.Host, &v.HTTP.Path, &v.HTTP.StatusCode, &duration, &v.HTTP.Success, &v.HTTP.RequestSize, &v.HTTP.ResponseSize, &v.HTTP.RequestPreview, &v.HTTP.ResponsePreview, &payloads)
 	copy(v.ID[:], id)
 	copy(v.BatchID[:], batch)
 	copy(v.FlowID[:], flow)
@@ -452,6 +492,14 @@ func applyCommon(b *where, t storage.TimeRange, service, environment string) {
 	if environment != "" {
 		b.eq("environment", environment)
 	}
+}
+
+func applyScope(b *where, scope trail.Scope) {
+	if scope.IsZero() {
+		return
+	}
+	b.eq("scope_type", scope.Type)
+	b.eq("scope_id", scope.ID)
 }
 func applyCursor(b *where, p storage.PageRequest, timeCol, idCol string) {
 	if p.Cursor.ID == "" {
