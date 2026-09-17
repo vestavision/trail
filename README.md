@@ -317,6 +317,11 @@ go get github.com/vestavision/trail
 Trail requires Go 1.24.1 or newer. The core remains standard-library-only;
 optional NATS, database, and S3 adapters bring their respective client modules.
 
+The ingestor creates the `TRAIL_EVENTS` JetStream stream and its durable
+consumer when either is missing. Set `TRAIL_MANAGE_STREAM=false` only when
+platform provisioning has already created both resources and the ingestor must
+not have JetStream management permissions.
+
 ### Container startup banner
 
 Trail container images print versioned ASCII art immediately before starting

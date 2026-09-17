@@ -47,17 +47,8 @@ func run(ctx context.Context) error {
 	streamName := env("TRAIL_NATS_STREAM", "TRAIL_EVENTS")
 	consumerName := env("TRAIL_NATS_CONSUMER", "TRAIL_INGESTOR")
 	subject := env("TRAIL_NATS_SUBJECT", "trail.events.v1")
-	if envBool("TRAIL_MANAGE_STREAM", false) {
-		if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-			Name: streamName, Subjects: []string{subject}, Storage: jetstream.FileStorage,
-			Retention: jetstream.LimitsPolicy, Discard: jetstream.DiscardNew, MaxAge: 30 * 24 * time.Hour,
-		}); err != nil {
-			return err
-		}
-		if _, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-			Durable: consumerName, AckPolicy: jetstream.AckExplicitPolicy, AckWait: 30 * time.Second,
-			MaxDeliver: envInt("TRAIL_INGEST_MAX_DELIVERIES", 5), MaxAckPending: envInt("TRAIL_INGEST_MAX_MESSAGES", 64) * 2,
-		}); err != nil {
+	if envBool("TRAIL_MANAGE_STREAM", true) {
+		if err := ensureJetStreamTopology(ctx, js, streamName, consumerName, subject, envInt("TRAIL_INGEST_MAX_DELIVERIES", 5), envInt("TRAIL_INGEST_MAX_MESSAGES", 64)); err != nil {
 			return err
 		}
 	}
@@ -81,6 +72,49 @@ func run(ctx context.Context) error {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 	return engine.Run(ctx)
+}
+
+// ensureJetStreamTopology creates Trail's stream and durable consumer only
+// when absent. Existing resources are never updated at startup, so their
+// retention and delivery policies remain owned by platform configuration.
+func ensureJetStreamTopology(ctx context.Context, js jetstream.JetStream, streamName, consumerName, subject string, maxDeliveries, maxMessages int) error {
+	stream, err := js.Stream(ctx, streamName)
+	if err != nil {
+		if !errors.Is(err, jetstream.ErrStreamNotFound) {
+			return fmt.Errorf("get Trail stream %q: %w", streamName, err)
+		}
+		stream, err = js.CreateStream(ctx, jetstream.StreamConfig{
+			Name: streamName, Subjects: []string{subject}, Storage: jetstream.FileStorage,
+			Retention: jetstream.LimitsPolicy, Discard: jetstream.DiscardNew, MaxAge: 30 * 24 * time.Hour,
+		})
+		if err != nil {
+			// Another ingestor may have won the creation race. Re-read rather
+			// than updating that stream's platform-owned configuration.
+			var readErr error
+			stream, readErr = js.Stream(ctx, streamName)
+			if readErr != nil {
+				return fmt.Errorf("create Trail stream %q: %w", streamName, err)
+			}
+		}
+	}
+
+	if _, err := stream.Consumer(ctx, consumerName); err == nil {
+		return nil
+	} else if !errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return fmt.Errorf("get Trail consumer %q: %w", consumerName, err)
+	}
+	if _, err := stream.CreateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable: consumerName, AckPolicy: jetstream.AckExplicitPolicy, AckWait: 30 * time.Second,
+		MaxDeliver: maxDeliveries, MaxAckPending: maxMessages * 2,
+	}); err != nil {
+		// As with the stream, tolerate a second ingestor creating the durable
+		// consumer concurrently without mutating its configuration.
+		if _, readErr := stream.Consumer(ctx, consumerName); readErr == nil {
+			return nil
+		}
+		return fmt.Errorf("create Trail consumer %q: %w", consumerName, err)
+	}
+	return nil
 }
 
 func openStore(ctx context.Context) (storage.IngestStore, error) {
