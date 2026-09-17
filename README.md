@@ -317,6 +317,23 @@ go get github.com/vestavision/trail
 Trail requires Go 1.24.1 or newer. The core remains standard-library-only;
 optional NATS, database, and S3 adapters bring their respective client modules.
 
+### Container startup banner
+
+Trail container images can print deployment-owned ASCII art immediately before
+starting the selected binary. The image has no built-in banner and produces no
+extra output until one is explicitly configured. For multi-line art, mount a
+read-only file and set `TRAIL_STARTUP_BANNER_FILE` to its path:
+
+```yaml
+environment:
+  TRAIL_STARTUP_BANNER_FILE: /etc/trail/banner/banner.txt
+volumes:
+  - ./trail-banner.txt:/etc/trail/banner/banner.txt:ro
+```
+
+For small banners, `TRAIL_STARTUP_BANNER` also accepts a Compose YAML block
+scalar. The banner must not contain credentials or other sensitive data.
+
 ```bash
 go test ./...
 go test -race ./...
