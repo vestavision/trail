@@ -9,5 +9,6 @@ FROM alpine:3.22
 RUN adduser -D -u 10001 trail
 COPY --from=build /out/app /usr/local/bin/trail-app
 COPY --chmod=0555 docker-entrypoint.sh /usr/local/bin/trail-entrypoint
+COPY --chown=trail:trail startup-banner.txt /etc/trail/startup-banner.txt
 USER trail
 ENTRYPOINT ["/usr/local/bin/trail-entrypoint"]

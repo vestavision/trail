@@ -1,17 +1,11 @@
 #!/bin/sh
 set -eu
 
-# A banner is intentionally supplied only at deployment time. Prefer a
-# read-only mounted file for multi-line ASCII art; the environment form is
-# useful for small deployments and Compose block scalars.
-if [ -n "${TRAIL_STARTUP_BANNER_FILE:-}" ]; then
-	if [ ! -r "$TRAIL_STARTUP_BANNER_FILE" ]; then
-		echo "trail: startup banner file is not readable: $TRAIL_STARTUP_BANNER_FILE" >&2
-		exit 1
-	fi
-	cat "$TRAIL_STARTUP_BANNER_FILE"
-elif [ -n "${TRAIL_STARTUP_BANNER:-}" ]; then
-	printf '%s\n' "$TRAIL_STARTUP_BANNER"
-fi
+# The banner is owned and versioned with the image. It is enabled by default;
+# only an explicit false value suppresses it for quiet deployments.
+case "${TRAIL_STARTUP_BANNER_ENABLED:-true}" in
+	false|FALSE|0|no|NO|off|OFF) ;;
+	*) cat /etc/trail/startup-banner.txt ;;
+esac
 
 exec /usr/local/bin/trail-app "$@"

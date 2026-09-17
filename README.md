@@ -319,20 +319,20 @@ optional NATS, database, and S3 adapters bring their respective client modules.
 
 ### Container startup banner
 
-Trail container images can print deployment-owned ASCII art immediately before
-starting the selected binary. The image has no built-in banner and produces no
-extra output until one is explicitly configured. For multi-line art, mount a
-read-only file and set `TRAIL_STARTUP_BANNER_FILE` to its path:
+Trail container images print versioned ASCII art immediately before starting
+the selected binary. The art lives in [`startup-banner.txt`](startup-banner.txt)
+and is therefore part of the released image. Update that file when changing the
+banner, then publish a new Trail image version.
+
+Set `TRAIL_STARTUP_BANNER_ENABLED=false` only when a deployment must suppress
+the banner:
 
 ```yaml
 environment:
-  TRAIL_STARTUP_BANNER_FILE: /etc/trail/banner/banner.txt
-volumes:
-  - ./trail-banner.txt:/etc/trail/banner/banner.txt:ro
+  TRAIL_STARTUP_BANNER_ENABLED: "false"
 ```
 
-For small banners, `TRAIL_STARTUP_BANNER` also accepts a Compose YAML block
-scalar. The banner must not contain credentials or other sensitive data.
+The banner must not contain credentials or other sensitive data.
 
 ```bash
 go test ./...
