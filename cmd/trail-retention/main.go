@@ -16,6 +16,7 @@ import (
 
 	"github.com/vestavision/trail"
 	"github.com/vestavision/trail/archive"
+	"github.com/vestavision/trail/internal/envfile"
 	"github.com/vestavision/trail/payload"
 	"github.com/vestavision/trail/payload/filesystem"
 	trails3 "github.com/vestavision/trail/payload/s3"
@@ -201,7 +202,7 @@ func runArchiveCommand(ctx context.Context, args []string) error {
 func openArchiveStore() (payload.Store, error) {
 	switch env("TRAIL_ARCHIVE_STORE", "filesystem") {
 	case "filesystem":
-		root := os.Getenv("TRAIL_ARCHIVE_FILESYSTEM_ROOT")
+		root := envfile.Get("TRAIL_ARCHIVE_FILESYSTEM_ROOT")
 		if root == "" {
 			return nil, errors.New("TRAIL_ARCHIVE_FILESYSTEM_ROOT is required")
 		}
@@ -209,7 +210,7 @@ func openArchiveStore() (payload.Store, error) {
 		if err != nil {
 			return nil, err
 		}
-		if active := os.Getenv("TRAIL_PAYLOAD_FILESYSTEM_ROOT"); active != "" {
+		if active := envfile.Get("TRAIL_PAYLOAD_FILESYSTEM_ROOT"); active != "" {
 			activeRoot, err := filepath.Abs(active)
 			if err != nil {
 				return nil, err
@@ -220,16 +221,16 @@ func openArchiveStore() (payload.Store, error) {
 		}
 		return filesystem.New(archiveRoot)
 	case "s3":
-		endpoint := os.Getenv("TRAIL_ARCHIVE_S3_ENDPOINT")
+		endpoint := envfile.Get("TRAIL_ARCHIVE_S3_ENDPOINT")
 		if endpoint == "" {
 			return nil, errors.New("TRAIL_ARCHIVE_S3_ENDPOINT is required")
 		}
 		archiveBucket := env("TRAIL_ARCHIVE_S3_BUCKET", "trail-archives")
 		archivePrefix := env("TRAIL_ARCHIVE_S3_PREFIX", "archives")
-		if endpoint == os.Getenv("TRAIL_PAYLOAD_S3_ENDPOINT") && archiveBucket == env("TRAIL_PAYLOAD_S3_BUCKET", "trail-payloads") && prefixesOverlap(archivePrefix, os.Getenv("TRAIL_PAYLOAD_S3_PREFIX")) {
+		if endpoint == envfile.Get("TRAIL_PAYLOAD_S3_ENDPOINT") && archiveBucket == env("TRAIL_PAYLOAD_S3_BUCKET", "trail-payloads") && prefixesOverlap(archivePrefix, envfile.Get("TRAIL_PAYLOAD_S3_PREFIX")) {
 			return nil, errors.New("archive and active S3 prefixes must not overlap")
 		}
-		return trails3.Open(trails3.Config{Endpoint: endpoint, AccessKey: os.Getenv("TRAIL_ARCHIVE_S3_ACCESS_KEY"), SecretKey: os.Getenv("TRAIL_ARCHIVE_S3_SECRET_KEY"), Bucket: archiveBucket, Region: os.Getenv("TRAIL_ARCHIVE_S3_REGION"), Prefix: archivePrefix, Secure: envBool("TRAIL_ARCHIVE_S3_SECURE", false), PathStyle: envBool("TRAIL_ARCHIVE_S3_PATH_STYLE", true), Name: "archive-s3"})
+		return trails3.Open(trails3.Config{Endpoint: endpoint, AccessKey: envfile.Get("TRAIL_ARCHIVE_S3_ACCESS_KEY"), SecretKey: envfile.Get("TRAIL_ARCHIVE_S3_SECRET_KEY"), Bucket: archiveBucket, Region: envfile.Get("TRAIL_ARCHIVE_S3_REGION"), Prefix: archivePrefix, Secure: envBool("TRAIL_ARCHIVE_S3_SECURE", false), PathStyle: envBool("TRAIL_ARCHIVE_S3_PATH_STYLE", true), Name: "archive-s3"})
 	default:
 		return nil, errors.New("unknown TRAIL_ARCHIVE_STORE")
 	}
@@ -297,7 +298,7 @@ func openStore(ctx context.Context) (interface {
 }, error) {
 	switch env("TRAIL_STORE", "clickhouse") {
 	case "clickhouse":
-		s, e := trailch.Open(trailch.Config{Addresses: []string{env("TRAIL_CLICKHOUSE_ADDR", "127.0.0.1:9000")}, Database: env("TRAIL_CLICKHOUSE_DATABASE", "default"), Username: env("TRAIL_CLICKHOUSE_USERNAME", "default"), Password: os.Getenv("TRAIL_CLICKHOUSE_PASSWORD")})
+		s, e := trailch.Open(trailch.Config{Addresses: []string{env("TRAIL_CLICKHOUSE_ADDR", "127.0.0.1:9000")}, Database: env("TRAIL_CLICKHOUSE_DATABASE", "default"), Username: env("TRAIL_CLICKHOUSE_USERNAME", "default"), Password: envfile.Get("TRAIL_CLICKHOUSE_PASSWORD")})
 		if e == nil {
 			e = s.Migrate(ctx)
 		}
@@ -314,15 +315,15 @@ func openStore(ctx context.Context) (interface {
 }
 func openPayloads() (map[string]payload.Store, error) {
 	out := map[string]payload.Store{}
-	if root := os.Getenv("TRAIL_PAYLOAD_FILESYSTEM_ROOT"); root != "" {
+	if root := envfile.Get("TRAIL_PAYLOAD_FILESYSTEM_ROOT"); root != "" {
 		s, e := filesystem.New(root)
 		if e != nil {
 			return nil, e
 		}
 		out["filesystem"] = s
 	}
-	if endpoint := os.Getenv("TRAIL_PAYLOAD_S3_ENDPOINT"); endpoint != "" {
-		s, e := trails3.Open(trails3.Config{Endpoint: endpoint, AccessKey: os.Getenv("TRAIL_PAYLOAD_S3_ACCESS_KEY"), SecretKey: os.Getenv("TRAIL_PAYLOAD_S3_SECRET_KEY"), Bucket: env("TRAIL_PAYLOAD_S3_BUCKET", "trail-payloads"), Region: os.Getenv("TRAIL_PAYLOAD_S3_REGION"), Prefix: os.Getenv("TRAIL_PAYLOAD_S3_PREFIX"), Secure: envBool("TRAIL_PAYLOAD_S3_SECURE", false), PathStyle: envBool("TRAIL_PAYLOAD_S3_PATH_STYLE", true), Name: "s3"})
+	if endpoint := envfile.Get("TRAIL_PAYLOAD_S3_ENDPOINT"); endpoint != "" {
+		s, e := trails3.Open(trails3.Config{Endpoint: endpoint, AccessKey: envfile.Get("TRAIL_PAYLOAD_S3_ACCESS_KEY"), SecretKey: envfile.Get("TRAIL_PAYLOAD_S3_SECRET_KEY"), Bucket: env("TRAIL_PAYLOAD_S3_BUCKET", "trail-payloads"), Region: envfile.Get("TRAIL_PAYLOAD_S3_REGION"), Prefix: envfile.Get("TRAIL_PAYLOAD_S3_PREFIX"), Secure: envBool("TRAIL_PAYLOAD_S3_SECURE", false), PathStyle: envBool("TRAIL_PAYLOAD_S3_PATH_STYLE", true), Name: "s3"})
 		if e != nil {
 			return nil, e
 		}
@@ -337,20 +338,20 @@ func prefixesOverlap(a, b string) bool {
 	return a == b || a == "" || b == "" || strings.HasPrefix(a+"/", b+"/") || strings.HasPrefix(b+"/", a+"/")
 }
 func env(k, v string) string {
-	if x := os.Getenv(k); x != "" {
+	if x := envfile.Get(k); x != "" {
 		return x
 	}
 	return v
 }
 func envInt(k string, v int) int {
-	x, e := strconv.Atoi(os.Getenv(k))
+	x, e := strconv.Atoi(envfile.Get(k))
 	if e != nil || x <= 0 {
 		return v
 	}
 	return x
 }
 func envBool(k string, v bool) bool {
-	x := os.Getenv(k)
+	x := envfile.Get(k)
 	if x == "" {
 		return v
 	}

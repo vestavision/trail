@@ -15,6 +15,7 @@ import (
 	gonats "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/vestavision/trail/ingestor"
+	"github.com/vestavision/trail/internal/envfile"
 	"github.com/vestavision/trail/storage"
 	trailch "github.com/vestavision/trail/storage/clickhouse"
 	trailpg "github.com/vestavision/trail/storage/postgres"
@@ -122,7 +123,7 @@ func openStore(ctx context.Context) (storage.IngestStore, error) {
 	case "clickhouse":
 		store, err := trailch.Open(trailch.Config{
 			Addresses: []string{env("TRAIL_CLICKHOUSE_ADDR", "127.0.0.1:9000")}, Database: env("TRAIL_CLICKHOUSE_DATABASE", "default"),
-			Username: env("TRAIL_CLICKHOUSE_USERNAME", "default"), Password: os.Getenv("TRAIL_CLICKHOUSE_PASSWORD"),
+			Username: env("TRAIL_CLICKHOUSE_USERNAME", "default"), Password: envfile.Get("TRAIL_CLICKHOUSE_PASSWORD"),
 		})
 		if err != nil {
 			return nil, err
@@ -171,20 +172,20 @@ func healthHandler(engine *ingestor.Engine) http.Handler {
 }
 
 func env(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
+	if value := envfile.Get(key); value != "" {
 		return value
 	}
 	return fallback
 }
 func envInt(key string, fallback int) int {
-	value, err := strconv.Atoi(os.Getenv(key))
+	value, err := strconv.Atoi(envfile.Get(key))
 	if err != nil || value <= 0 {
 		return fallback
 	}
 	return value
 }
 func envBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
+	value := envfile.Get(key)
 	if value == "" {
 		return fallback
 	}
